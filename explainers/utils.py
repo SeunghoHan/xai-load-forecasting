@@ -11,7 +11,7 @@ from .grad_cam import GradCAMExplainer
 from .lrp import LRPExplainer
  
 def get_explainer(explainer_type, model, device, train_data, sequence_length, 
-                  input_size, selected_features, scaler=None):
+                  input_size, selected_features, is_long_term_forecast, scaler=None):
     """
     Initialize the appropriate explainer based on the type.
 
@@ -28,9 +28,8 @@ def get_explainer(explainer_type, model, device, train_data, sequence_length,
     Returns:
         BaseExplainer: The initialized explainer object.
     """
-    
-    if isinstance(train_data, tuple):
-        
+
+    if is_long_term_forecast:
         # if isinstance(train_data[0], torch.Tensor):
         #     train_data[0] = train_data[0].cpu().numpy()  # Convert to NumPy
         # if isinstance(train_data[1], torch.Tensor):
@@ -50,21 +49,31 @@ def get_explainer(explainer_type, model, device, train_data, sequence_length,
                                     scaler=MinMaxScaler())
             
         elif explainer_type == 'SHAP':
-            return ShapExplainer(model, device, train_sequences, sequence_length, input_size, selected_features, scaler)
+            return ShapExplainer(model, train_data, sequence_length, input_size, selected_features, devicer)
         elif explainer_type == 'ATTENTION':
             return AttentionExplainer(model, device, selected_features)
         else:
             print(f"Invalid explainer type: {explainer_type}")
             return None
 
-        
     else:
         if explainer_type == 'LIME':
-            return LimeExplainer(model, device, train_sequences, sequence_length, input_size, selected_features, scaler)
+            scaler = MinMaxScaler()
+            scaler.fit(train_data.reshape(-1, len(selected_features['single'])))
+            return LimeExplainer(model=model, 
+                                 device=device, 
+                                 sequences=train_data, 
+                                 sequence_length=sequence_length['single'], 
+                                 input_size=input_size['single'], 
+                                 selected_features=selected_features['single'], 
+                                 scaler=scaler)
+            
         elif explainer_type == 'SHAP':
-            return ShapExplainer(model, device, train_sequences, sequence_length, input_size, selected_features, scaler)
+            return ShapExplainer(model, train_data, sequence_length, input_size, selected_features, device)
+            
         elif explainer_type == 'ATTENTION':
             return AttentionExplainer(model, device, selected_features)
+            
         else:
             print(f"Invalid explainer type: {explainer_type}")
             return None

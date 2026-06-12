@@ -40,13 +40,14 @@ def create_model(model_name, input_size, hidden_size, num_layers, output_size,
         )
     elif model_name == 'LS_CNNLSTM_Att': 
         return LongShortCNNLSTMWithAttention(
-            input_dim_long=input_size['long'],
-            input_dim_short=input_size['short'],
-            hidden_dim=hidden_size,
-            long_output_dim=output_size['long'],
-            output_dim=output_size['short'], 
-            seq_len_long=long_term_length, 
-            seq_len_short=short_term_length)
+            long_input_size=input_size['long'],
+            short_input_size=input_size['short'],
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            long_output_size=output_size['long'],
+            short_output_size=output_size['short'], 
+            long_term_length=long_term_length, 
+            short_term_length=short_term_length)
     else:
         raise ValueError(f"Model {model_name} is not recognized.")
 
@@ -108,8 +109,24 @@ def train_for_short_term_forecast(model, model_name, train_sequences, train_targ
     model.to(device)
 
     # Data loader
-    train_dataset = torch.utils.data.TensorDataset(torch.tensor(train_sequences, dtype=torch.float32), torch.tensor(train_targets, dtype=torch.float32))
-    eval_dataset = torch.utils.data.TensorDataset(torch.tensor(eval_sequences, dtype=torch.float32), torch.tensor(eval_targets, dtype=torch.float32))
+    # train_dataset = torch.utils.data.TensorDataset(
+    #     torch.tensor(train_sequences, dtype=torch.float32),
+    #     torch.tensor(train_targets, dtype=torch.float32)
+    # )
+    # eval_dataset = torch.utils.data.TensorDataset(
+    #     torch.tensor(eval_sequences, dtype=torch.float32),
+    #     torch.tensor(eval_targets, dtype=torch.float32)
+    # )
+
+
+    train_dataset = torch.utils.data.TensorDataset(
+        train_sequences.clone().detach().to(torch.float32),
+        train_targets.clone().detach().to(torch.float32)
+    )
+    eval_dataset = torch.utils.data.TensorDataset(
+        eval_sequences.clone().detach().to(torch.float32),
+        eval_targets.clone().detach().to(torch.float32)
+    )
     
     train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
     eval_loader = torch.utils.data.DataLoader(dataset=eval_dataset, batch_size=batch_size, shuffle=False)
@@ -125,7 +142,7 @@ def train_for_short_term_forecast(model, model_name, train_sequences, train_targ
         running_loss = 0.0
 
         # tqdm을 사용하여 학습 진행도 표시
-        with tqdm(train_loader, unit="batch") as tepoch:
+        with tqdm(train_loader, unit="batch", leave=True) as tepoch:
             for sequences_batch, targets_batch in tepoch:
                 tepoch.set_description(f"Epoch {epoch+1}/{num_epochs}")
                 
@@ -168,7 +185,7 @@ def train_for_short_term_forecast(model, model_name, train_sequences, train_targ
                 eval_loss += loss.item()
 
         eval_loss /= len(eval_loader)
-        print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {train_loss:.4f}, Val Loss: {eval_loss:.7f}')
+        # print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {train_loss:.4f}, Val Loss: {eval_loss:.7f}')
 
         # Check if the validation loss improved
         if eval_loss < best_val_loss:
@@ -236,7 +253,7 @@ def train_for_long_term_forecast(model, model_name, train_data, train_targets,
     best_val_loss = float('inf')
     epochs_no_improve = 0
 
-    for epoch in tqdm(range(num_epochs)):
+    for epoch in tqdm(range(num_epochs), leave=True):
         model.train()
         train_loss = 0.0
 
@@ -281,7 +298,7 @@ def train_for_long_term_forecast(model, model_name, train_data, train_targets,
         eval_loss /= len(eval_loader)
         scheduler.step(eval_loss)
         
-        print(f"Epoch [{epoch+1}/{num_epochs}], Train Loss: {train_loss:.4f}, Val Loss: {eval_loss:.4f}")
+        # print(f"Epoch [{epoch+1}/{num_epochs}], Train Loss: {train_loss:.4f}, Val Loss: {eval_loss:.4f}")
 
         if not(criterion.alpha == 1.0 and criterion.beta == 1.0):
             criterion.alpha = min(1.0, criterion.alpha + 0.05)  # Increase alpha
@@ -335,13 +352,28 @@ def evaluate_for_short_term_forecast(model, eval_sequences, eval_targets, model_
     all_outputs = np.concatenate(all_outputs, axis=0)
     all_targets = np.concatenate(all_targets, axis=0)
 
-    # Metrics calculation
-    r2 = r2_score(all_targets, all_outputs)
-    n = len(all_targets)
-    k = eval_sequences.shape[-1]
-    adjusted_r2 = 1 - ((1 - r2) * (n - 1)) / (n - k - 1)
-    smape_score = smape(all_targets, all_outputs)
-    mase_score = mase(all_targets, all_outputs)
+    if np.isnan(all_outputs).any() or np.isnan(all_targets).any():
+        print("Warning: NaN detected in evaluation data. Returning default scores.")
+        return {"R2": 0.0, "Adjusted R2": 0.0, "SMAPE": 0.0, "MASE": 0.0}
+
+    try:
+        r2 = r2_score(all_targets, all_outputs)
+        n = len(all_targets)
+        k = eval_sequences.shape[-1]
+        adjusted_r2 = 1 - ((1 - r2) * (n - 1)) / (n - k - 1)
+        smape_score = smape(all_targets, all_outputs)
+        mase_score = mase(all_targets, all_outputs)
+    except Exception as e:
+        print(f"Error during metrics calculation: {e}. Returning default scores.")
+        return {"R2": 0.0, "Adjusted R2": 0.0, "SMAPE": 0.0, "MASE": 0.0}
+
+    # # Metrics calculation
+    # r2 = r2_score(all_targets, all_outputs)
+    # n = len(all_targets)
+    # k = eval_sequences.shape[-1]
+    # adjusted_r2 = 1 - ((1 - r2) * (n - 1)) / (n - k - 1)
+    # smape_score = smape(all_targets, all_outputs)
+    # mase_score = mase(all_targets, all_outputs)
 
     # Print results
     print(f"R² Score: {r2:.4f}")

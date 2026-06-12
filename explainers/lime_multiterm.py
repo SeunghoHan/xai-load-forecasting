@@ -204,7 +204,7 @@ class LimeExplainer_MT(BaseExplainer):
         selected_long = eval_long[indices]
         selected_short = eval_short[indices]
 
-        for i, (long_point, short_point) in enumerate(tqdm(zip(selected_long, selected_short), desc="Processing samples", total=num_samples)):
+        for i, (long_point, short_point) in enumerate(tqdm(zip(selected_long, selected_short), desc="Processing samples", total=num_datapoints)):
             explanations = self.explain(
                 data_point_long=long_point,
                 data_point_short=short_point,
@@ -224,7 +224,7 @@ class LimeExplainer_MT(BaseExplainer):
                 if actual_feature_name not in excluded_features:
                     feature_importance_short[actual_feature_name] += abs(importance)
 
-            if i % 10 == 0:
+            if i % 30 == 0:
                 print("Important Long-term Features: ", feature_importance_long)
                 print("Important Short-term Features: ", feature_importance_short)
                 

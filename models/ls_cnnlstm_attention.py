@@ -2,60 +2,229 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class AttentionLayer(nn.Module):
-    def __init__(self, embed_dim):
-        super(AttentionLayer, self).__init__()
-        self.query_layer = nn.Linear(embed_dim, embed_dim)
-        self.key_layer = nn.Linear(embed_dim, embed_dim)
-        self.value_layer = nn.Linear(embed_dim, embed_dim)
-        self.scale = torch.sqrt(torch.tensor(embed_dim, dtype=torch.float32))
- 
-    def forward(self, query, key, value):
-        Q = self.query_layer(query)
-        K = self.key_layer(key)
-        V = self.value_layer(value)
+class CrossAttention(nn.Module):
+    def __init__(self, embed_dim, num_heads):
+        super(CrossAttention, self).__init__()
+        self.attn = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, batch_first=True)
 
-        attention_weights = F.softmax(torch.matmul(Q, K.transpose(-2, -1)) / self.scale, dim=-1)
-        attention_output = torch.matmul(attention_weights, V)
-        return attention_output, attention_weights
+    def forward(self, query, key, value):
+        attn_output, _ = self.attn(query, key, value)
+        return attn_output
+
 
 class LongShortCNNLSTMWithAttention(nn.Module):
-    def __init__(self, input_dim_long, input_dim_short, hidden_dim, long_output_dim, output_dim, seq_len_long, seq_len_short):
+    def __init__(self, 
+                 long_input_size, 
+                 short_input_size, 
+                 hidden_size,  
+                 num_layers, 
+                 long_output_size, 
+                 short_output_size, 
+                 long_term_length, 
+                 short_term_length, 
+                 num_heads=2,
+                 dropout=0.3):
         super(LongShortCNNLSTMWithAttention, self).__init__()
 
-        # Long-term CNN-LSTM
-        self.conv_long = nn.Conv1d(input_dim_long, hidden_dim, kernel_size=3, padding=1)
-        self.lstm_long = nn.LSTM(hidden_dim, hidden_dim, batch_first=True)
+        self.dropout_rate = dropout
+        self.hidden_size = hidden_size
 
-        # Short-term CNN-LSTM
-        self.conv_short = nn.Conv1d(input_dim_short, hidden_dim, kernel_size=3, padding=1)
-        self.lstm_short = nn.LSTM(hidden_dim + hidden_dim, hidden_dim, batch_first=True)  # Long-term + Short-term
+        # Long-term CNN (1D)
+        self.long_cnn = nn.Sequential(
+            nn.Conv1d(long_input_size, 16, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm1d(16),
+            nn.ReLU(),
+            nn.Dropout(self.dropout_rate),
+            nn.Conv1d(16, 32, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm1d(32),
+            nn.ReLU(),
+            nn.MaxPool1d(kernel_size=2, stride=2)
+        )
 
-        # Attention Layer
-        self.attention = AttentionLayer(embed_dim=hidden_dim)
+        self.long_seq_len = self._calculate_seq_length_after_cnn(long_input_size, long_term_length, cnn_type="long")
 
-        # Fully Connected Layers
-        self.fc_long = nn.Linear(seq_len_long * hidden_dim, long_output_dim)  # Long-term output compression
-        self.fc_short = nn.Linear(hidden_dim, output_dim)  # Final prediction
+        self.long_lstm = nn.LSTM(
+            input_size=self.long_seq_len['channels'],
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            batch_first=True,
+            dropout=self.dropout_rate,
+            bidirectional=True
+        )
 
-    def forward(self, x_long, x_short):
-        # Long-term branch
-        x_long = self.conv_long(x_long.transpose(1, 2)).transpose(1, 2)
-        x_long, (h_long, c_long) = self.lstm_long(x_long)
+        # Short-term CNN (1D)
+        self.short_cnn = nn.Sequential(
+            nn.Conv1d(short_input_size, 16, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm1d(16),
+            nn.ReLU(),
+            nn.Dropout(self.dropout_rate),
+            nn.Conv1d(16, 32, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm1d(32),
+            nn.ReLU(),
+            nn.MaxPool1d(kernel_size=2, stride=2)
+        )
 
-        # Compress long-term output
-        x_long_flat = x_long.reshape(x_long.size(0), -1)
-        long_representation = self.fc_long(x_long_flat)
+        self.short_seq_len = self._calculate_seq_length_after_cnn(short_input_size, short_term_length, cnn_type="short")
 
-        # Short-term branch
-        x_short = self.conv_short(x_short.transpose(1, 2)).transpose(1, 2)
-        attention_output, attention_weights = self.attention(x_short, x_long, x_long)  # Cross-Attention
-        x_short_combined = torch.cat([x_short, attention_output], dim=-1)
+        self.short_lstm = nn.LSTM(
+            input_size=self.short_seq_len['channels'],
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            batch_first=True,
+            dropout=self.dropout_rate,
+            bidirectional=True
+        )
 
-        
-        x_short, (h_short, c_short) = self.lstm_short(x_short_combined)
+        # Cross Attention Layer
+        self.cross_attention = CrossAttention(embed_dim=hidden_size * 2, num_heads=num_heads)
 
-        # Final prediction
-        output_short = self.fc_short(x_short[:, -1, :])
+        self.long_fc = nn.Linear(hidden_size * 2 * self.long_seq_len['length'], long_output_size)
+        self.short_fc = nn.Linear(hidden_size * 2, short_output_size)
 
-        return long_representation, output_short, attention_weights
+    def forward(self, long_input, short_input):
+        # Long-term processing
+        x_long = self.long_cnn(long_input.permute(0, 2, 1))  # (B, C, T)
+        x_long = x_long.permute(0, 2, 1)  # (B, T, C)
+        long_output, _ = self.long_lstm(x_long)  # (B, T, D)
+
+        # Short-term processing
+        x_short = self.short_cnn(short_input.permute(0, 2, 1))  # (B, C, T)
+        x_short = x_short.permute(0, 2, 1)  # (B, T, C)
+        short_output, _ = self.short_lstm(x_short)  # (B, T, D)
+
+        # Cross Attention: short attends to long
+        attended_short = self.cross_attention(short_output, long_output, long_output)
+
+        # Long-term prediction: flatten entire sequence
+        long_flat = long_output.contiguous().view(long_output.size(0), -1)
+        long_final = self.long_fc(long_flat)
+
+        # Short-term prediction: use last timestep of attended output
+        short_final = self.short_fc(attended_short[:, -1, :])
+
+        return long_final, short_final, attended_short
+
+    def _calculate_seq_length_after_cnn(self, input_channels, seq_len, cnn_type="long"):
+        with torch.no_grad():
+            dummy_input = torch.zeros(1, input_channels, seq_len)
+            if cnn_type == "long":
+                output = self.long_cnn(dummy_input)
+            else:
+                output = self.short_cnn(dummy_input)
+            return {"length": output.size(2), "channels": output.size(1)}
+
+# import torch
+# import torch.nn as nn
+# import torch.nn.functional as F
+
+# class CrossAttention(nn.Module):
+#     def __init__(self, embed_dim, num_heads):
+#         super(CrossAttention, self).__init__()
+#         self.attn = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, batch_first=True)
+
+#     def forward(self, query, key, value):
+#         # query: (B, T_q, D), key/value: (B, T_k, D)
+#         attn_output, _ = self.attn(query, key, value)
+#         return attn_output
+
+
+# class LongShortCNNLSTMWithAttention(nn.Module):
+#     def __init__(self, 
+#                  long_input_size, 
+#                  short_input_size, 
+#                  hidden_size,  
+#                  num_layers, 
+#                  long_output_size, 
+#                  short_output_size, 
+#                  long_term_length, 
+#                  short_term_length, 
+#                  num_heads=2,
+#                  dropout=0.3):
+#         super(LongShortCNNLSTMWithAttention, self).__init__()
+
+#         self.dropout_rate = dropout
+
+#         # Long-term CNN (1D)
+#         self.long_cnn = nn.Sequential(
+#             nn.Conv1d(long_input_size, 16, kernel_size=3, stride=1, padding=1),
+#             nn.BatchNorm1d(16),
+#             nn.ReLU(),
+#             nn.Dropout(self.dropout_rate),
+#             nn.Conv1d(16, 32, kernel_size=3, stride=2, padding=1),
+#             nn.BatchNorm1d(32),
+#             nn.ReLU(),
+#             nn.MaxPool1d(kernel_size=2, stride=2)
+#         )
+
+#         self.long_cnn_output_size = self._calculate_cnn_output_size(
+#             self.long_cnn, (1, long_input_size, long_term_length)
+#         )
+
+#         self.long_lstm = nn.LSTM(
+#             input_size=self.long_cnn_output_size,
+#             hidden_size=hidden_size,
+#             num_layers=num_layers,
+#             batch_first=True,
+#             dropout=self.dropout_rate,
+#             bidirectional=True
+#         )
+
+#         # Short-term CNN (1D)
+#         self.short_cnn = nn.Sequential(
+#             nn.Conv1d(short_input_size, 16, kernel_size=3, stride=1, padding=1),
+#             nn.BatchNorm1d(16),
+#             nn.ReLU(),
+#             nn.Dropout(self.dropout_rate),
+#             nn.Conv1d(16, 32, kernel_size=3, stride=2, padding=1),
+#             nn.BatchNorm1d(32),
+#             nn.ReLU(),
+#             nn.MaxPool1d(kernel_size=2, stride=2)
+#         )
+
+#         self.short_cnn_output_size = self._calculate_cnn_output_size(
+#             self.short_cnn, (1, short_input_size, short_term_length)
+#         )
+
+#         self.short_lstm = nn.LSTM(
+#             input_size=self.short_cnn_output_size,
+#             hidden_size=hidden_size,
+#             num_layers=num_layers,
+#             batch_first=True,
+#             dropout=self.dropout_rate,
+#             bidirectional=True
+#         )
+
+#         # Cross Attention Layer
+#         self.cross_attention = CrossAttention(embed_dim=hidden_size * 2, num_heads=num_heads)
+
+#         self.long_fc = nn.Linear(hidden_size * 2 * long_term_length, long_output_size)
+#         self.short_fc = nn.Linear(hidden_size * 2, short_output_size)
+
+#     def forward(self, long_input, short_input):
+#         # Long-term processing
+#         x_long = self.long_cnn(long_input.permute(0, 2, 1))  # (B, C, T) <- input (B, T, C)
+#         x_long = x_long.permute(0, 2, 1)  # (B, T, C)
+#         long_output, _ = self.long_lstm(x_long)  # (B, T, D)
+
+#         # Short-term processing
+#         x_short = self.short_cnn(short_input.permute(0, 2, 1))  # (B, C, T)
+#         x_short = x_short.permute(0, 2, 1)  # (B, T, C)
+#         short_output, _ = self.short_lstm(x_short)  # (B, T, D)
+
+#         # Cross Attention: short attends to long
+#         attended_short = self.cross_attention(short_output, long_output, long_output)
+
+#         # Long-term prediction: flatten entire sequence
+#         long_flat = long_output.contiguous().view(long_output.size(0), -1)
+#         long_final = self.long_fc(long_flat)
+
+#         # Short-term prediction: use last timestep of attended output
+#         short_final = self.short_fc(attended_short[:, -1, :])
+
+#         return long_final, short_final
+
+#     def _calculate_cnn_output_size(self, module, input_shape):
+#         with torch.no_grad():
+#             dummy_input = torch.zeros(*input_shape)
+#             output = module(dummy_input)
+#             return output.size(1)

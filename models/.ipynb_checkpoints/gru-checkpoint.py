@@ -27,3 +27,4 @@ class GRUModel(BaseModel):
             x = torch.tensor(x, dtype=torch.float32).to(next(self.parameters()).device)
             outputs = self.forward(x)
             return outputs.cpu().numpy()
+

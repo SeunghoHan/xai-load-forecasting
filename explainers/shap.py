@@ -3,8 +3,9 @@ import torch
 import numpy as np
 import random
 import matplotlib.pyplot as plt
-import pandas as pd
+import pandas as pdf
 import seaborn as sns
+import pandas as pd
 
 class ModelOutputWrapper(torch.nn.Module):
     """Wrapper to get only the main output from a model with multiple outputs (e.g., predictions and attention weights)."""
@@ -22,11 +23,11 @@ class ModelOutputWrapper(torch.nn.Module):
         return main_output
 
 class ShapExplainer:
-    def __init__(self, model, train_sequences, sequence_length, input_size, selected_features, device, num_train_sample=100):
+    def __init__(self, model, train_data, sequence_length, input_size, selected_features, device, num_train_sample=100): 
         wrapped_model = ModelOutputWrapper(model).to(device)
         self.model = wrapped_model
         # self.model = model
-        self.train_sequences = train_sequences
+        self.train_sequences = train_data
         self.sequence_length = sequence_length
         self.input_size = input_size
         self.selected_features = selected_features
@@ -54,8 +55,12 @@ class ShapExplainer:
         return shap_values, random_samples
     
     def sequence_to_dataframe(self, sequence):
-        reshaped_sequence = sequence.reshape(self.sequence_length, self.input_size)
-        return pd.DataFrame(reshaped_sequence, columns=self.selected_features[:self.input_size])
+        # reshaped_sequence = sequence.reshape(self.sequence_length, self.input_size)
+        # return pd.DataFrame(reshaped_sequence, columns=self.selected_features[:self.input_size])
+        reshaped_sequence = sequence.reshape(self.sequence_length, -1)
+        return pd.DataFrame(reshaped_sequence,
+                            columns=self.selected_features[:reshaped_sequence.shape[1]])
+
 
     def plot_summary(self, shap_values, sample_df):
         print("Summary plot")
@@ -67,90 +72,218 @@ class ShapExplainer:
                           feature_names=feature_names,
                           show=True)
     
-    def plot_force(self, shap_values, sample_df, target_idx):
-        print("Force plot (target output index: {})".format(target_idx))
+    # def plot_force(self, shap_values, sample_df, target_idx):
+    #     print("Force plot (target output index: {})".format(target_idx))
 
-        feature_names = [f"{feature}_{i}" for i in range(self.sequence_length) for feature in self.selected_features]
-        selected_shap_values = shap_values[ :, :, target_idx]  
-        base_value = self.explainer.expected_value[target_idx] if isinstance(self.explainer.expected_value, (list, np.ndarray)) else self.explainer.expected_value
+    #     feature_names = [f"{feature}_{i}" for i in range(self.sequence_length) for feature in self.selected_features]
+    #     selected_shap_values = shap_values[ :, :, target_idx]  
+    #     base_value = self.explainer.expected_value[target_idx] if isinstance(self.explainer.expected_value, (list, np.ndarray)) else self.explainer.expected_value
     
+    #     shap_values_explanation = shap.Explanation(
+    #         values=selected_shap_values.flatten(),  
+    #         base_values=base_value,  
+    #         data=sample_df.values.flatten(),  
+    #         feature_names=feature_names[:self.input_size * self.sequence_length]
+    #     )
+    
+    #     # Force Plot 생성
+    #     shap.force_plot(
+    #         base_value=base_value,  # 모델의 기본 예측값
+    #         shap_values=shap_values_explanation.values,  # 각 feature의 SHAP 값
+    #         features=shap_values_explanation.data,  # 각 feature의 실제 값
+    #         feature_names=shap_values_explanation.feature_names,  # feature 이름
+    #         matplotlib=True, 
+    #         contribution_threshold=0.02
+    #     )
+    def plot_force(self, shap_values, sample_df):
+        print("Force plot")
+        
+        feature_names = [
+            f"{feature}_{i}"
+            for i in range(self.sequence_length)
+            for feature in self.selected_features  # <- 이 부분이 filtered_feature_names 이어야 함
+        ]
+        
+        # shap_values의 shape 확인 후 matching 되는 길이까지만 자르기
+        expected_len = sample_df.values.flatten().shape[0]
+        shap_values_flat = shap_values.flatten()[:expected_len]
+        feature_names_flat = feature_names[:expected_len]
+        
         shap_values_explanation = shap.Explanation(
-            values=selected_shap_values.flatten(),  
-            base_values=base_value,  
-            data=sample_df.values.flatten(),  
-            feature_names=feature_names[:self.input_size * self.sequence_length]
+            values=shap_values_flat,
+            base_values=base_value,
+            data=sample_df.values.flatten(),
+            feature_names=feature_names_flat
         )
-    
-        # Force Plot 생성
+        
         shap.force_plot(
-            base_value=base_value,  # 모델의 기본 예측값
-            shap_values=shap_values_explanation.values,  # 각 feature의 SHAP 값
-            features=shap_values_explanation.data,  # 각 feature의 실제 값
-            feature_names=shap_values_explanation.feature_names,  # feature 이름
-            matplotlib=True, 
+            base_value=base_value,
+            shap_values=shap_values_explanation.values,
+            features=shap_values_explanation.data,
+            feature_names=shap_values_explanation.feature_names,
+            matplotlib=True,
             contribution_threshold=0.02
         )
+        
 
+    # def plot_waterfall(self, shap_values, sample_df, target_idx):
+    #     print("Waterfall plot (target output index: {})".format(target_idx))
+    #     feature_names = [f"{feature}_{i}" for i in range(self.sequence_length) for feature in self.selected_features]
+    #     selected_shap_values = shap_values[ :, :, target_idx]  
+    #     base_value = self.explainer.expected_value[target_idx] if isinstance(self.explainer.expected_value, (list, np.ndarray)) else self.explainer.expected_value
+    
+    #     shap_values_explanation = shap.Explanation(
+    #         values=selected_shap_values.flatten(),  
+    #         base_values=base_value,  
+    #         data=sample_df.values.flatten(),  
+    #         feature_names=feature_names[:self.input_size * self.sequence_length]
+    #     )
+    
+    #     # Waterfall Plot 생성
+    #     shap.waterfall_plot(shap_values_explanation, max_display=25)
+    
     def plot_waterfall(self, shap_values, sample_df, target_idx):
         print("Waterfall plot (target output index: {})".format(target_idx))
-        feature_names = [f"{feature}_{i}" for i in range(self.sequence_length) for feature in self.selected_features]
-        selected_shap_values = shap_values[ :, :, target_idx]  
-        base_value = self.explainer.expected_value[target_idx] if isinstance(self.explainer.expected_value, (list, np.ndarray)) else self.explainer.expected_value
     
-        shap_values_explanation = shap.Explanation(
-            values=selected_shap_values.flatten(),  
-            base_values=base_value,  
-            data=sample_df.values.flatten(),  
-            feature_names=feature_names[:self.input_size * self.sequence_length]
+        # feature 이름: 시간 순서로 평탄화
+        feature_names = [
+            f"{feature}_{i}" 
+            for i in range(self.sequence_length) 
+            for feature in self.selected_features
+        ]
+    
+        # 해당 target_idx에 대한 shap 값만 추출 → shape: (sequence_len, input_dim)
+        selected_shap_values = shap_values[:, :, target_idx]  # shape: (720, 7)
+        shap_flat = selected_shap_values.flatten()            # shape: (5040,)
+        data_flat = sample_df.values.flatten()                # shape: (5040,)
+    
+        assert shap_flat.shape == data_flat.shape, \
+            f"SHAP ({shap_flat.shape}) != Data ({data_flat.shape})"
+    
+        base_value = (
+            self.explainer.expected_value[target_idx]
+            if isinstance(self.explainer.expected_value, (list, np.ndarray))
+            else self.explainer.expected_value
         )
     
-        # Waterfall Plot 생성
-        shap.waterfall_plot(shap_values_explanation, max_display=25)
-    
-    def plot_dependence(self, shap_values, sample_df, target_idx):
-        print("Dependence plot (target output index: {})".format(target_idx))
+        explanation = shap.Explanation(
+            values=shap_flat,
+            base_values=base_value,
+            data=data_flat,
+            feature_names=feature_names
+        )
 
-        reshaped_shap_values = shap_values[:, :, target_idx]
-        for feature in self.selected_features:
-            shap.dependence_plot(feature, reshaped_shap_values, sample_df)
+        shap.waterfall_plot(explanation, max_display=25)
     
-    def plot_decision(self, shap_values, sample_df, target_idx):
-        print("Decision plot (target output index: {})".format(target_idx))
-        feature_names = [f"{feature}_{i}" for i in range(self.sequence_length) for feature in self.selected_features]
-        selected_shap_values = shap_values[:, :, target_idx].flatten()  
-        base_value = self.explainer.expected_value[target_idx] if isinstance(self.explainer.expected_value, (list, np.ndarray)) else self.explainer.expected_value
         
+    
+    # def plot_dependence(self, shap_values, sample_df, target_idx):
+        # print("Dependence plot (target output index: {})".format(target_idx))
+
+        # reshaped_shap_values = shap_values[:, :, target_idx]
+        # for feature in self.selected_features:
+        #     shap.dependence_plot(feature, reshaped_shap_values, sample_df)
+
+    def plot_dependence(self, shap_values, sample_df, target_idx, target_f_idx, interaction_feature=None):
+        feature_name = self.selected_features[target_f_idx]
+        print(f"Dependence plot: {feature_name} (target output index: {target_idx})")
+    
+        try:
+            reshaped_shap_values = shap_values[:, :, target_idx]
+            if interaction_feature is not None:
+                shap.dependence_plot(
+                    ind=feature_name,
+                    shap_values=reshaped_shap_values,
+                    features=sample_df,
+                    interaction_index=interaction_feature,
+                    show=True
+                )
+            else:
+                shap.dependence_plot(
+                    ind=feature_name,
+                    shap_values=reshaped_shap_values,
+                    features=sample_df,
+                    show=True
+                )
+        except Exception as e:
+            print(f"[Error in dependence_plot for feature '{feature_name}']: {e}")
+        
+    
+    # def plot_decision(self, shap_values, sample_df, target_idx):
+    #     print("Decision plot (target output index: {})".format(target_idx))
+    #     feature_names = [f"{feature}_{i}" for i in range(self.sequence_length) for feature in self.selected_features]
+    #     selected_shap_values = shap_values[:, :, target_idx].flatten()  
+    #     base_value = self.explainer.expected_value[target_idx] if isinstance(self.explainer.expected_value, (list, np.ndarray)) else self.explainer.expected_value
+        
+    #     shap_values_explanation = shap.Explanation(
+    #         values=selected_shap_values, 
+    #         base_values=np.repeat(base_value, selected_shap_values.shape),  
+    #         data=sample_df.values.flatten(), 
+    #         feature_names=feature_names[:self.input_size * self.sequence_length]
+    #     )
+        
+    #     shap.decision_plot(
+    #         base_value=base_value, 
+    #         shap_values=shap_values_explanation.values,  
+    #         feature_names=feature_names[:self.input_size * self.sequence_length], 
+    #         feature_display_range=slice(None, 25)
+    #     )
+
+
+    def plot_decision(self, shap_values, sample_df):
+        print("Decision plot")
+    
+        feature_names = [f"{feature}_{i}" for i in range(self.sequence_length) for feature in sample_df.columns]
+        base_value = self.explainer.expected_value if not isinstance(self.explainer.expected_value, (list, np.ndarray)) else self.explainer.expected_value[0]
+    
         shap_values_explanation = shap.Explanation(
-            values=selected_shap_values, 
-            base_values=np.repeat(base_value, selected_shap_values.shape),  
-            data=sample_df.values.flatten(), 
-            feature_names=feature_names[:self.input_size * self.sequence_length]
+            values=shap_values.flatten(),
+            base_values=np.repeat(base_value, shap_values.size),
+            data=sample_df.values.flatten(),
+            feature_names=feature_names[:sample_df.shape[1] * self.sequence_length]
         )
-        
+    
         shap.decision_plot(
-            base_value=base_value, 
-            shap_values=shap_values_explanation.values,  
-            feature_names=feature_names[:self.input_size * self.sequence_length], 
+            base_value=base_value,
+            shap_values=shap_values_explanation.values,
+            feature_names=shap_values_explanation.feature_names,
             feature_display_range=slice(None, 25)
         )
 
-    def plot_scatter(self, shap_values, sample_df, target_idx):
-        print(f"Scatter plot (target output index: {target_idx})")
+    # def plot_scatter(self, shap_values, sample_df, target_idx):
+    #     print(f"Scatter plot (target output index: {target_idx})")
         
-        feature_names = [f"{feature}_{i}" for i in range(self.sequence_length) for feature in self.selected_features]
-        selected_shap_values = shap_values[:, :, target_idx]
+    #     feature_names = [f"{feature}_{i}" for i in range(self.sequence_length) for feature in self.selected_features]
+    #     selected_shap_values = shap_values[:, :, target_idx]
 
+    #     shap_values_explanation = shap.Explanation(
+    #         values=selected_shap_values, 
+    #         base_values=np.repeat(self.explainer.expected_value, self.sequence_length),  
+    #         data=sample_df.values, 
+    #         feature_names=feature_names[:self.input_size * self.sequence_length]  
+    #     )
+    
+    #     for feature in self.selected_features:
+    #         feature_name = f"{feature}_0"
+    #         feature_index = feature_names.index(feature_name)
+    #         shap.plots.scatter(shap_values_explanation[feature_index])
+
+
+    def plot_scatter(self, shap_values, sample_df):
+        print("Scatter plot")
+    
+        feature_names = [f"{feature}_{i}" for i in range(self.sequence_length) for feature in sample_df.columns]
+        
         shap_values_explanation = shap.Explanation(
-            values=selected_shap_values, 
-            base_values=np.repeat(self.explainer.expected_value, self.sequence_length),  
-            data=sample_df.values, 
-            feature_names=feature_names[:self.input_size * self.sequence_length]  
+            values=shap_values,
+            base_values=np.repeat(self.explainer.expected_value[0], shap_values.shape[0]),
+            data=sample_df.values,
+            feature_names=sample_df.columns
         )
     
-        for feature in self.selected_features:
-            feature_name = f"{feature}_0"
-            feature_index = feature_names.index(feature_name)
-            shap.plots.scatter(shap_values_explanation[feature_index])
+        for feature in sample_df.columns:
+            shap.plots.scatter(shap_values_explanation[:, feature])
+
     
     def plot_bar(self, shap_values, sample_df):
         print("Bar plot")
@@ -197,37 +330,111 @@ class ShapExplainer:
 
         shap.plots.heatmap(shap_values_explanation)
 
-    def plot_partial_dependence(self, shap_values, sample_df, target_feature_idx, target_idx):
-        print("Partial Dependence Plot (feature: {}, target output index)".format(self.selected_features[target_feature_idx], target_idx))
+    # def plot_partial_dependence(self, shap_values, sample_df, target_feature_idx, target_idx):
+    #     print("Partial Dependence Plot (feature: {}, target output index)".format(self.selected_features[target_feature_idx], target_idx))
     
-        feature_names = [f"{feature}_{i}" for i in range(self.sequence_length) for feature in self.selected_features]
-        selected_shap_values = shap_values[:, :, target_idx]
+    #     feature_names = [f"{feature}_{i}" for i in range(self.sequence_length) for feature in self.selected_features]
+    #     selected_shap_values = shap_values[:, :, target_idx]
         
-        if self.selected_features[target_feature_idx] in sample_df.columns:
-            # Partial Dependence Plot 생성
-            shap.dependence_plot(target_feature_idx, selected_shap_values, sample_df)
-        else:
-            print(f"Feature {target_feature_name} not found in sample_df columns: {sample_df.columns}")
+    #     if self.selected_features[target_feature_idx] in sample_df.columns:
+    #         # Partial Dependence Plot 생성
+    #         shap.dependence_plot(target_feature_idx, selected_shap_values, sample_df)
+    #     else:
+    #         print(f"Feature {target_feature_name} not found in sample_df columns: {sample_df.columns}")
+
+
+    def plot_partial_dependence(self, shap_values, sample_df, target_feature_idx):
+        feature_name = sample_df.columns[target_feature_idx]
+        print(f"Partial Dependence Plot: {feature_name}")
     
+        try:
+            shap.dependence_plot(
+                feature_name,
+                shap_values,
+                sample_df,
+                interaction_index=None,
+                show=True
+            )
+        except Exception as e:
+            print(f"[Error in PDP]: {e}")
 
     def visualize_all_one_sample(self, shap_values, eval_sequences, target_f_idx1, target_f_idx2, target_idx=0):
         # target_f_idx1: for PDP
         # target_f_idx1, target_f_idx2: interaction plot
         # target_idx: target output index
         shap.initjs()
-    
-        sample_df = self.sequence_to_dataframe(eval_sequences)
+
         
-        self.plot_summary(shap_values, sample_df)
-        self.plot_force(shap_values, sample_df, target_idx)
-        self.plot_waterfall(shap_values, sample_df, target_idx)
-        self.plot_dependence(shap_values, sample_df, target_idx)
-        self.plot_decision(shap_values, sample_df, target_idx)
-        self.plot_scatter(shap_values, sample_df, target_idx)
-        self.plot_bar(shap_values, sample_df)
-        self.plot_beeswarm(shap_values, sample_df)
-        self.plot_heatmap(shap_values, sample_df)
-        self.plot_partial_dependence(shap_values, sample_df, target_f_idx1, target_idx)
+        ## 시간 관련 feature 제거
+        filtered_shap_values, filtered_eval_sequence, filtered_feature_names = self.filter_features(shap_values, eval_sequences)
+    
+        sample_df = self.sequence_to_dataframe(filtered_eval_sequence)
+        self.selected_features = filtered_feature_names
+            
+        self.plot_summary(filtered_shap_values, sample_df)    
+        # self.plot_force(filtered_shap_values, sample_df)
+        # self.plot_waterfall(filtered_shap_values, sample_df, target_idx=0)
+        # self.plot_decision(filtered_shap_values, sample_df)
+        # self.plot_scatter(filtered_shap_values, sample_df)
+        # self.plot_bar(filtered_shap_values, sample_df)
+        # self.plot_beeswarm(filtered_shap_values, sample_df)
+        # self.plot_heatmap(filtered_shap_values, sample_df)
+        # self.plot_partial_dependence(filtered_shap_values, sample_df, target_f_idx1)
+
+        # dependence 따로 출력
+        dependence_plot_configs = [
+            {"target_feature": "Global_active_power", "interaction_feature": "Global_intensity"},
+            {"target_feature": "Sub_metering_3", "interaction_feature": "Global_active_power"},
+            {"target_feature": "Humidity", "interaction_feature": "Temperature"},
+            {"target_feature": "Temperature", "interaction_feature": "Global_active_power"},
+            # {"target_feature": "Humidity", "interaction_feature": "Global_active_power"},
+            # {"target_feature": "Temperature", "interaction_feature": "Global_intensity"},
+        ]
+        # 전체 소비량이 커질 때 전류 변화에 따라 모델 출력 영향이 달라지는가
+        # 세 번째 부하 영역의 소비가 전체 소비량에 따라 얼마나 중요한지
+        # 외부 환경 변수 간의 상호작용이 모델 예측에 어떻게 작용하는지
+        # 서로 다른 영역의 소비가 상호작용하며 영향을 주는지
+        # 전류량이 특정 부하에서의 소비에 따라 다른 영향을 주는지
+
+        # target_idx는 대부분 0 (단일 출력 모델 기준)
+        target_idx = 0
+        
+        # 각 조합에 대해 plot_dependence 호출
+        for config in dependence_plot_configs:
+            target_f_idx = self.selected_features.index(config["target_feature"])
+            self.plot_dependence(
+                shap_values=filtered_shap_values,
+                sample_df=sample_df,
+                target_idx=target_idx,
+                target_f_idx=target_f_idx,
+                interaction_feature=config["interaction_feature"]
+            )
+    
+
+    
+        
+        # self.plot_summary(shap_values, sample_df)
+        # self.plot_force(shap_values, sample_df, target_idx)
+        # self.plot_waterfall(shap_values, sample_df, target_idx)
+        # self.plot_dependence(shap_values, sample_df, target_idx)
+        # self.plot_decision(shap_values, sample_df, target_idx)
+        # self.plot_scatter(shap_values, sample_df, target_idx)
+        # self.plot_bar(shap_values, sample_df)
+        # self.plot_beeswarm(shap_values, sample_df)
+        # self.plot_heatmap(shap_values, sample_df)
+        # self.plot_partial_dependence(shap_values, sample_df, target_f_idx1, target_idx)
+
+
+    def get_non_time_feature_indices(self):
+        return [i for i, f in enumerate(self.selected_features) if all(tf not in f for tf in ['sin_hour', 'cos_hour', 'sin_day', 'cos_day', 'sin_month', 'cos_month'])]
+
+    def filter_features(self, shap_values, eval_sequence):
+        indices = self.get_non_time_feature_indices()
+        filtered_shap_values = shap_values[:, indices]
+        filtered_eval_sequence = eval_sequence[:, indices]
+        filtered_feature_names = [self.selected_features[i] for i in indices]
+        return filtered_shap_values, filtered_eval_sequence, filtered_feature_names
+    
     
     def visualize_all_multiple_samples(self, shap_values, eval_sequences, target_f_idx1, target_f_idx2, target_idx=0):
         """
